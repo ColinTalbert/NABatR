@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1541087261475.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "8AFC6FCB",
+    "lastKnownWriteTime" : 1541687724,
+    "last_content_update" : 1541687724080,
+    "path" : "C:/projects/nabat/R/nabatr/R/get_nabat_grts.R",
+    "project_path" : "R/get_nabat_grts.R",
+    "properties" : {
+        "cursorPosition" : "38,15",
+        "scrollLine" : "20"
+    },
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

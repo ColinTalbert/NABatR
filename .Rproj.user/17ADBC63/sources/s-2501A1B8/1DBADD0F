@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1541689122831.000,
+    "dirty" : true,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2780481956",
+    "id" : "1DBADD0F",
+    "lastKnownWriteTime" : 1541698944,
+    "last_content_update" : 1541698944249,
+    "path" : "C:/projects/nabat/R/nabatr/install.R",
+    "project_path" : "install.R",
+    "properties" : {
+        "cursorPosition" : "6,0",
+        "scrollLine" : "0"
+    },
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
