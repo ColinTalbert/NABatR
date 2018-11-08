@@ -1,11 +1,7 @@
-install.packages("ggplot2")
-install.packages("ggmap")
-install.packages("httr")
-install.packages("rgdal")
-install.packages("xml2")
-install.packages("sp")
-install.packages("maps")
-install.packages("mapdata")
-
 install.packages("devtools")
 devtools::install_github("talbertc-usgs/nabatr", dependencies=FALSE)
+
+install.packages("ggplot2")
+install.packages("ggmap")
+install.packages("maps")
+install.packages("mapdata")
