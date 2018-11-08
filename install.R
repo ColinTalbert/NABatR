@@ -1,5 +1,5 @@
 install.packages("devtools")
-devtools::install_github("talbertc-usgs/nabatr", dependencies=FALSE)
+devtools::install_github("talbertc-usgs/nabatr")
 
 install.packages("ggplot2")
 install.packages("ggmap")
