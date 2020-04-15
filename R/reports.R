@@ -192,6 +192,8 @@ get_acoustic_stationary_report = function(token,
 #' @param out_dir String output directory to save report .html file ex: /path/to/directory
 #' @param file_name String output file name ex: paste0('doc_report_',project_id_,'_',Sys.Date(),'.docx')
 #' @param project_df Dataframe from running get_projects()
+#' @param manual_species_grts_df_w Dataframe manual species df wide get_species_counts_wide()
+#' @param auto_species_grts_df_w Dataframe auto species df wide get_species_counts_wide()
 #' @param project_id Integer project id from NABat ex: 105
 #' @param auto_nights_df Dataframe from running get_observed_nights()
 #' @param manual_nights_df Dataframe from running get_observed_nights()
@@ -208,6 +210,8 @@ get_acoustic_stationary_report = function(token,
 #' doc_ = build_ac_doc(out_dir = '/path/to/output/dir',
 #'                     file_name  = paste0('doc_report_',project_id_,'_',Sys.Date(),'.docx'),
 #'                     project_df = project_df_,
+#'                     manual_species_grts_df_w,
+#'                     auto_species_grts_df_w,
 #'                     project_id = project_id_,
 #'                     auto_nights_df = auto_nights_df_,
 #'                     manual_nights_df = manual_nights_df_,
@@ -237,13 +241,188 @@ build_ac_doc = function(out_dir,
   manual_nights_df,
   cover_photo = NULL,
   date = format(Sys.time(), "%B %d, %Y"),
-  map = NULL){
+  map = NULL,
+  range_maps = TRUE){
 
   print ('Enter Report Function')
 
+  # Setup temps directory to store intermediate files
   if (dir.exists(paste0(out_dir, '/temps/'))==FALSE){
     dir.create(paste0(out_dir, '/temps/'))
   }
+  if (dir.exists(paste0(out_dir, '/temps/range_maps/'))==FALSE){
+    dir.create(paste0(out_dir, '/temps/range_maps/'))
+  }
+
+  # Get all species long
+  all_species_totals_l_l = get_all_species_counts_long(auto_nights_df, manual_nights_df, fil = TRUE)
+
+  # Select a species to grab it's range from the shapefile
+  selected_species = names(all_species_totals_l_l %>% dplyr::select(-c('GRTS', 'type', 'project_id', 'year', 'NoID')))
+  all_grts_with_data = unique(all_species_totals_l_l$GRTS)
+  num_all_grts_with_data = length(all_grts_with_data)
+
+  # Read in species ranges
+  range_file = '/data/bat_species_ranges/'
+  if (file.exists(range_file)){
+    species_shp = readOGR(range_file)[,1:4]
+  }else{
+    species_shp = pkg.env$species_ranges
+  }
+
+  print (species_shp)
+  # Set CRS to WGS
+  proj4string(species_shp) = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+  # Build species dataframe to merge with NABat's species lookup table
+  species_shp_names_df = data.frame(species = as.character(unique(species_shp$SCI_NAME)),
+    value = rep(1, length(unique(species_shp$SCI_NAME))), stringsAsFactors = FALSE)
+  # Grab the nabatr package environment for NABat's species lookup table
+  species_lookup_df = pkg.env$bats_df
+
+  # Merge the two together
+  species_range_df = species_lookup_df %>%
+    dplyr::left_join(species_shp_names_df, by = c('species'='species')) %>% subset(value == 1) %>%
+    dplyr::select(-value)
+
+  if (range_maps){
+    no_species_range = c()
+    species_with_range = c()
+    maps_grts_files = c()
+    maps_range_files = c()
+    # If the species exists in the ranges shapefile than build it otherwise add it to a no_species_range vector
+    for (spc in selected_species){
+      if (spc %in% species_range_df$species_code){
+        # Grab species range
+        spc_row = subset(species_range_df, species_range_df$species_code == spc)
+        spc_shp = subset(species_shp, species_shp$SCI_NAME == spc_row$species)
+
+        # Grab GRTS from data -- Both Auto and Manual species
+        spc_spec_totals_df = subset(all_species_totals_l_l, all_species_totals_l_l[spc] > 0)
+        spc_spec_totals_df_aut = subset(all_species_totals_l_l, all_species_totals_l_l[spc] > 0 & all_species_totals_l_l$type == 'auto')
+        spc_spec_totals_df_man = subset(all_species_totals_l_l, all_species_totals_l_l[spc] > 0 & all_species_totals_l_l$type == 'manual')
+
+        man_grts = spc_spec_totals_df_man$GRTS
+        aut_grts = spc_spec_totals_df_aut$GRTS
+
+        # Get GRTS with species Man/Auto/Both
+        both_grts = intersect(man_grts, aut_grts)
+        man_only_grts = setdiff(man_grts, both_grts)
+        aut_only_grts = setdiff(aut_grts, both_grts)
+        # Get GRTS without species
+        grts_with_spc      = unique(spc_spec_totals_df$GRTS)
+        grts_without_spc   = setdiff(all_grts_with_data, grts_with_spc)
+
+        # Grab coordinates for the GRTS with data
+        man_grts_with_spc_spdf = get_grts_shp(grts_ids = man_only_grts,
+          project_id = project_id,
+          project_df = project_df)
+        aut_grts_with_spc_spdf = get_grts_shp(grts_ids = aut_only_grts,
+          project_id = project_id,
+          project_df = project_df)
+        both_grts_with_spc_spdf = get_grts_shp(grts_ids = both_grts,
+          project_id = project_id,
+          project_df = project_df)
+        grts_without_spc_spdf = get_grts_shp(grts_ids = grts_without_spc,
+          project_id = project_id,
+          project_df = project_df)
+
+        all_grts_spdf = rbind(man_grts_with_spc_spdf, aut_grts_with_spc_spdf, both_grts_with_spc_spdf, grts_without_spc_spdf)
+        full_extent = extent(all_grts_spdf)
+
+        # Build the grts map overlayed by this species range
+        #c ('#ff8400', '#337acc', '#23992f')) %>% # orange/blue/green
+        m = leaflet() %>% addTiles() %>% addPolygons(data = spc_shp, label = spc, group = 'species_range')
+        if (length(man_grts_with_spc_spdf) > 0){
+          extent = extent(man_grts_with_spc_spdf)
+          lng_ = extent@xmin + ((extent@xmax - extent@xmin)/2)
+          lat_ = extent@ymin + ((extent@ymax - extent@ymin)/2)
+          m = m %>% addPolygons(data = man_grts_with_spc_spdf, color = 'black', fillOpacity = 1, fillColor = '#23992f', weight=1, opacity=1)
+        }
+        if (length(aut_grts_with_spc_spdf) > 0){
+          extent = extent(aut_grts_with_spc_spdf)
+          lng_ = extent@xmin + ((extent@xmax - extent@xmin)/2)
+          lat_ = extent@ymin + ((extent@ymax - extent@ymin)/2)
+          m = m %>% addPolygons(data = aut_grts_with_spc_spdf, color = 'black', fillOpacity = 1, fillColor = '#337acc', weight=1, opacity=1)
+        }
+        if (length(both_grts_with_spc_spdf) > 0){
+          extent = extent(both_grts_with_spc_spdf)
+          lng_ = extent@xmin + ((extent@xmax - extent@xmin)/2)
+          lat_ = extent@ymin + ((extent@ymax - extent@ymin)/2)
+          m = m %>% addPolygons(data = both_grts_with_spc_spdf, color = 'black', fillOpacity = 1, fillColor = '#ff8400', weight=1, opacity=1)
+        }
+        if(length(grts_without_spc_spdf) > 0){
+          extent = extent(grts_without_spc_spdf)
+          lng_ = extent@xmin + ((extent@xmax - extent@xmin)/2)
+          lat_ = extent@ymin + ((extent@ymax - extent@ymin)/2)
+          m = m %>% addPolygons(data = grts_without_spc_spdf, color = 'black', fillOpacity = 0, fillColor = 'rgb(0,0,0,0)', weight=1, opacity=1)
+        }
+
+        print ('Adding Minimap')
+        m = m %>% fitBounds(full_extent@xmin, full_extent@ymin, full_extent@xmax, full_extent@ymax) %>%
+          addMiniMap(toggleDisplay = F,
+            zoomLevelFixed = 2,
+            minimized = FALSE
+          ) %>%
+          htmlwidgets::onRender("
+            function(el, t) {
+            var myMap = this;
+
+            var range = myMap.layerManager._byGroup.species_range;
+            console.log('test', myMap.layerManager)
+            console.log(range)
+            console.log('3',range._latlngs);
+            var range2 = new L.FeatureGroup();
+            Object.keys(range).forEach(k => {
+            if (range[k]._latlngs) {
+            range[k]._latlngs.forEach(f => {
+            var coords = [];
+            f.forEach(c => {
+            coords.push([c.lat, c.lng])
+            })
+            //range2.push(new L.Polygon(coords))
+            range2.addLayer(new L.Polygon(coords))
+            })
+            console.log(range[k]._latlngs)
+            }
+            });
+            console.log(range2);
+            myMap.minimap.changeLayer(new L.LayerGroup([L.tileLayer.provider('Esri.NatGeoWorldMap'), range2]));
+            }") %>%
+          addLegend('bottomright', labels = c(paste0(spc, ' Automatic & Manual'), paste0(spc, ' Automatic Only'),
+            paste0(spc, ' Manual Only'), paste0(spc, ' Not Found')), colors = c('#ff8400', '#337acc', '#23992f', 'rgb(0,0,0,0)'), opacity =1)
+
+        print ('Getting a zoom point to setView for rangemap')
+        # zoom_pt = rgeos::gCentroid(spc_shp)
+        range_extent = extent(spc_shp)
+        # Build species range map for this species
+        # website for diff providers: http://leaflet-extras.github.io/leaflet-providers/preview/
+        print ('Creating range map with leaflet')
+        m_range = leaflet() %>% addTiles() %>%
+          addPolygons(data = spc_shp, label = spc, group = 'species_range') %>%
+          # setView(lng = zoom_pt@coords[,1], lat = zoom_pt@coords[,2], zoom = 3) %>%
+          addLegend('bottomright',labels = paste0(spc, ' Species Range'), colors = c('blue'), opacity =1) %>%
+          fitBounds(range_extent@xmin, range_extent@ymin, range_extent@xmax, range_extent@ymax)
+
+        print ('Saving out map')
+        # Save out the two maps
+        out_maps_dir = paste0(out_dir, '/temps/range_maps/')
+        map_out_ = paste0(out_maps_dir, spc, '_grts.png')
+        mapshot(m, file = map_out_, remove_controls = c("zoomControl", "layersControl", "homeButton"))
+        range_map_out_ = paste0(out_maps_dir, spc, '_range.png')
+        mapshot(m_range, file = range_map_out_, remove_controls = c("zoomControl", "layersControl", "homeButton"))
+
+        # species with range maps
+        maps_grts_files = c(maps_grts_files, map_out_)
+        maps_range_files = c(maps_range_files, range_map_out_)
+        species_with_range = c(spc, species_with_range)
+      }else {
+        # No species range maps found for these species
+        no_species_range = c(spc, no_species_range)
+      }
+    }
+  }
+
 
   print ('Set Variables')
   logo_img_ = system.file("templates", "nabat_logo.png", package = "nabatr")
@@ -251,7 +430,7 @@ build_ac_doc = function(out_dir,
   proj_id = project_id
   project_row_df = subset(project_df, project_df$project_id == proj_id)
   title        = project_row_df$project_name
-  by           = project_row_df$owner_email
+  # by           = project_row_df$owner_email
   organization = project_row_df$organization
   this_project_description = project_row_df$project_description
 
@@ -276,9 +455,8 @@ build_ac_doc = function(out_dir,
   selected_year = unique(format(as.Date(acoustic_bulk_df$recording_time), '%Y'))[1]
   # Total number of bat calls (all recording wav files counted)
   number_of_bat_calls = length(acoustic_bulk_df$audio_recording_name)
-  # Total number of net nights across all sites
-  net_nights_df = acoustic_bulk_df %>% dplyr::mutate(site_date_nights = paste0(acoustic_bulk_df$site_name, '___', as.Date(acoustic_bulk_df$recording_time)))
-  number_of_net_nights = length(unique(net_nights_df$site_date_nights))
+  # Total number of detector nights across all sites
+  number_of_net_nights = dim(auto_nights_df)[1]
 
   # If the manual_species_grts_df_w is not null
   if (!is.null(manual_species_grts_df_w)){
@@ -304,7 +482,7 @@ build_ac_doc = function(out_dir,
   # Text for Results using Project Summary Data
   results_overview = paste0("A total of ", number_of_sites," sites in ", number_of_cells," NABat GRTS cells were surveyed in ",
     selected_year," (Figure 1, Table 1). ", number_of_bat_calls," call files were recorded over ",
-    number_of_net_nights," net nights, and ", number_of_species_detected,
+    number_of_net_nights," detector nights, and ", number_of_species_detected,
     " species were detected (Figure 1, Table 2). Activity rate (average bat passes per night) ranged from ",
     low_avg_per_night," to ", high_avg_per_night,", with a median of ", median_activity_rate," and a mean of ",
     mean_activity_rate," (Figures 3, 4).")
@@ -346,6 +524,7 @@ build_ac_doc = function(out_dir,
       # MANUAL names
       man_species_names = as.character(subset(pkg.env$bats_df, pkg.env$bats_df$species_code %in% grts_species_man)$species)
       man_species_names = man_species_names[man_species_names != ""]
+      man_species_names = man_species_names[!is.na(man_species_names)]
     }
 
 
@@ -360,9 +539,11 @@ build_ac_doc = function(out_dir,
 
     # AUTO names
     auto_species_names = as.character(subset(pkg.env$bats_df, pkg.env$bats_df$species_code %in% grts_species_auto)$species)
+    auto_species_names = auto_species_names[auto_species_names != ""]
+    auto_species_names = auto_species_names[!is.na(auto_species_names)]
 
     all_species_names = unique(c(man_species_names, auto_species_names))
-    all_species_names = all_species_names[all_species_names != ""]
+
 
     # Build Method of species ID
     methods = c()
@@ -415,7 +596,6 @@ build_ac_doc = function(out_dir,
   row.names(all_rows_man) = NULL
   row.names(all_grts_rows) = NULL
 
-
   print ('Build dataframe with center points')
 
   project_id_ = project_id
@@ -457,7 +637,7 @@ build_ac_doc = function(out_dir,
   }
 
   # If in CONUS add State and County.  Otherwise exclude
-  if (grts_fname == 'CONUS'){
+  if (grts_fname == 'Continental US'){
     print ('Build grts_df_final')
     state_county = ll_to_county_state(dplyr::select(grts_df, x, y))
     grts_df['state_county'] = state_county
@@ -478,21 +658,33 @@ build_ac_doc = function(out_dir,
   descr_table1 = paste0("Table 1. NABat GRTS cells surveyed in ",selected_year,". Number of detector points, detector nights, and species detected are shown for each cell.")
   descr_table3 = paste0("Table 2. Bat species detected in each NABat GRTS cell surveyed, ",selected_year,". Years with detections and method of species identification are shown for each species in each cell. ")
 
-  print ('Build flextable 1')
   # Table 1
-  ft1 = flextable::flextable(grts_df_final, col_keys = names(grts_df_final))
+  print ('Build flextable 1')
+  ft1_names_list = list()
+  for (name in names(grts_df_final)){
+    ft1_names_list[name] = gsub("_", " ", name)
+  }
+  print (ft1_names_list)
+  ft1 = flextable::flextable(grts_df_final)
+  ft1 = flextable::set_header_labels(ft1, values = ft1_names_list)
   ft1 = flextable::height(ft1, height =.7, part = 'header')
   ft1 = flextable::width(ft1, width = 1)
   ft1 = flextable::fontsize(ft1, size = 10, part = "all")
   # Table 3
   print ('Build flextable 3')
-  ft3 = flextable::flextable(table3_df, col_keys = names(table3_df))
+  ft3_names_list = list()
+  for (name in names(table3_df)){
+    ft3_names_list[name] = gsub("_", " ", name)
+  }
+  print (ft3_names_list)
+  ft3 = flextable::flextable(table3_df)
+  ft3 = flextable::set_header_labels(ft3, values = ft3_names_list)
   ft3 = flextable::height(ft3, height =.5, part = 'header')
   ft3 = flextable::width(ft3, width =2)
   ft3 = flextable::merge_v(ft3, j = 'GRTS')
   ft3 = flextable::fontsize(ft3, size = 10, part = "all")
   ft3 = flextable::italic(ft3, j = 2)
-  ft3 = flextable::hline(ft3, border = fp_border(width = .75, color = "black"), part = "body")
+  ft3 = flextable::hline(ft3, border = fp_border(color = "black"), part = "body")
 
   print ('Save out map')
   # Figure 1
@@ -555,7 +747,11 @@ build_ac_doc = function(out_dir,
     }
   }
 
+
   bat_id_type = all_bat_id_types$bat_types
+  bat_id_color_df = data.frame(colors = c('#ff8400','#337acc', '#23992f'),
+    types = c('At least one manual ID/site', 'Auto ID only', 'Manual ID only'), stringsAsFactors = FALSE)
+  bat_id_colors = subset(bat_id_color_df, bat_id_color_df$types %in% bat_id_type)$colors
   bat_auto_counts = all_bat_id_types$auto_count / length(grts_df_final$GRTS)
   bat_species = all_bat_id_types$species
 
@@ -565,22 +761,38 @@ build_ac_doc = function(out_dir,
   ll = list(family = "cambria", size = 16, color = "black")
   leg = list(family = "cambria", size = 16, color = "#6b6b6b")
   # ti = list(title = "Bat Activity rate", titlefont = f)
-  x = list(title = "", titlefont = leg)
+  x_ = list(title = "Bat Species", titlefont = l)
+  x_log = list(title = "Bat Species")
   y = list(title = "Average No. of Bat Passes",titlefont = l)
   y_log = list(title = "Average No. of Bat Passes(Log Scale)",titlefont = l, type = 'log')
-  m = list(t = 70)
-
-  fig2_p_base = plot_ly(x = bat_species, y = bat_auto_counts, type = 'bar',
-    width = 850, height = 650,
-    marker = list(line = list(color = 'black', width = .5)),
-    color = bat_id_type, colors = c('#ff8400', '#337acc', '#23992f')) %>% # orange/blue/green
-    layout(margin = m, font = leg, xaxis = x, yaxis = y, showlegend = TRUE, autosize=F, bargap = .6,
-      legend = list(x = .2, y = 1.05, orientation = 'h', font = leg))
+  # Setting the margin for these plots
+  m_fig_2     = list(t = 50, b = 30, l = 30, r = 15, pad = 0)
+  m_fig_2_log = list(t = 50, b = 40, l = 45, r = 15, pad = 0)
+  m_fig_4     = list(t = 50, b = 20, l = 20, r = 10, pad = 0)
+  # m = list(t = 60, b = 50, l = 50, r = 15, pad = 25)
 
   # fig 2a
-  fig2_p = fig2_p_base %>% layout(title = list(x = .1, y = 1.4, text = 'Average Bat Activity Rate', font = f))
+  fig2_p = plot_ly(x = bat_species, y = bat_auto_counts, type = 'bar',
+    width = 850, height = 650,
+    marker = list(line = list(color = 'black', width = .5)),
+    color = bat_id_type, colors = bat_id_colors) %>%
+    layout(xaxis = x_, yaxis = y,
+      margin = m_fig_2,
+      # title = list(x = .1, y = 1.4, text = 'Average Bat Activity Rate', font = f),
+      title = 'Average Bat Activity Rate',
+      font = leg, showlegend = TRUE, autosize=FALSE, bargap = .6,
+      legend = list(x = .2, y = 1.05, orientation = 'h', font = leg))
   # fig 2b
-  fig2_p_log = fig2_p_base %>% layout(yaxis = y_log, title = list(x = .1, y = 1.1, text = 'Average Bat Activity Rate using a Logarithmic Scale', font = f))
+  fig2_p_log = plot_ly(x = bat_species, y = bat_auto_counts, type = 'bar',
+    width = 850, height = 650,
+    marker = list(line = list(color = 'black', width = .5)),
+    color = bat_id_type, colors = bat_id_colors) %>%
+    layout(xaxis = x_log, yaxis = y_log,
+      margin = m_fig_2_log,
+      # title = list(x = .1, y = 1.1, text = 'Average Bat Activity Rate using a Logarithmic Scale', font = f),
+      title = 'Average Bat Activity Rate using a Logarithmic Scale',
+      font = leg, showlegend = TRUE, autosize=FALSE, bargap = .6,
+      legend = list(x = .2, y = 1.05, orientation = 'h', font = leg))
 
   print ('Save out plotly fig2')
   # Export to a file to be used to upload into the .docx
@@ -599,16 +811,16 @@ build_ac_doc = function(out_dir,
   col_ = rainbow(n = length(fig3_data_df$species))
 
   # fig 3
-  pie_species = plot_ly(values = fig3_data_df$counts, type = 'pie', width='100%',
-    labels = fig3_data_df$species,
-    showlegend=FALSE,
-    marker = list(colors = col_,line = list(color = 'black', width = .5)),
-    height = 1000,
-    textinfo = 'label+value') %>%
-    layout(title = list(x = .1, y = .9, text = 'Automatic Detection Counts', font = f), font = ll)
-  print ('Save out plotly fig3')
-  fig3_f = paste0(out_dir, "/temps/fig3.png")
-  plotly::export(pie_species, file = fig3_f)
+  # pie_species = plot_ly(values = fig3_data_df$counts, type = 'pie', width='100%',
+  #   labels = fig3_data_df$species,
+  #   showlegend=FALSE,
+  #   marker = list(colors = col_,line = list(color = 'black', width = .5)),
+  #   height = 1000,
+  #   textinfo = 'label+value') %>%
+  #   layout(title = list(x = .1, y = .9, text = 'Automatic Detection Counts', font = f), font = ll)
+  # print ('Save out plotly fig3')
+  # fig3_f = paste0(out_dir, "/temps/fig3.png")
+  # plotly::export(pie_species, file = fig3_f)
 
 
   # Fig 4
@@ -632,8 +844,9 @@ build_ac_doc = function(out_dir,
   fig4_p = plot_ly(x = fig_4_grts, y = fig_4_sums, type = 'bar',
     width = 850, height = 650,
     marker = list(line = list(color = 'black', width = .5)),
-    color = 'blue', colors = c('#ff8400', '#337acc', '#23992f')) %>% # orange/blue/green
-    layout(margin = m, font = leg, xaxis = x, yaxis = y, showlegend = F, autosize=F, bargap = .6,
+    color = '#337acc', colors = c('#337acc')) %>%
+    layout(margin = m_fig_4, font = leg, xaxis = x, yaxis = y, showlegend = F, autosize=F, bargap = .6,
+      title = 'Average Bat Calls at each GRTS',
       legend = list(x = .2, y = 1.05, orientation = 'h', font = leg))
   print ('Save out plotly fig4')
   # Export to a file to be used to upload into the .docx
@@ -642,26 +855,29 @@ build_ac_doc = function(out_dir,
 
   print ('Set bold and par style')
   # Font for title
+  bold_face_map = shortcuts$fp_bold(font.size = 12)
   bold_face = shortcuts$fp_bold(font.size = 16)
+  date_font = fp_text(color = 'black', font.family = 'Cambria', font.size = 12)
   par_style = fp_par(text.align = "center")
   par_style_left = fp_par(text.align = "left")
   example_font = fp_text(color = "#bfbfbf", font.size = 12, bold = FALSE,
     italic = FALSE, underlined = FALSE, font.family = "Cambria",
     vertical.align = "baseline", shading.color = "transparent")
   black_bracket = fp_text(color = "black", font.size = 12, font.family = "Cambria")
+  fig6_font = fp_text(color = "black", font.size = 10, font.family = "Cambria")
 
   print ('Begin .docx build')
   doc = read_docx() %>%
     # Add title/header
-    # 'Normal', 'heading 1', 'heading 2', 'heading 3', 'centered', 'graphic title', 'table title', 'toc 1', 'toc 2', 'Balloon Text'
+    # 'Normal', 'heading 1', '  heading 2', 'heading 3', 'centered', 'graphic title', 'table title', 'toc 1', 'toc 2', 'Balloon Text'
     # body_add_img(src = logo_img_, width = 2, height = .75, style= 'centered', pos = 'before') %>%
-    body_add_fpar(fpar(ftext('Acoustic Stationary Report', prop = bold_face), fp_p = par_style ), style = 'centered') %>%
-    body_add_par(value = "", style = "centered") %>%
+    body_add_fpar(fpar(ftext('Stationary Acoustic Report', prop = bold_face), fp_p = par_style ), style = 'centered') %>%
+    body_add_fpar(fpar(ftext(paste0(selected_year, ' Data'), prop = date_font), fp_p = par_style ), style = 'centered') %>%
     body_add_par(value = "", style = "centered") %>%
     body_add_fpar(fpar(ftext(title, prop = bold_face), fp_p = par_style ), style = 'centered') %>%
     # body_add_par(value = title, style = "graphic title") %>%
     body_add_par(value = "", style = "centered") %>%
-    body_add_par(value = paste0('By ', by), style = "centered") %>%
+    # body_add_par(value = paste0('By ', by), style = "centered") %>%
     body_add_par(value = organization, style = "centered") %>%
     body_add_par(value = date, style = "centered") %>%
 
@@ -742,7 +958,7 @@ build_ac_doc = function(out_dir,
     # Figure 1
     body_add_par(value = descr_fig1, style = "Normal") %>%
     body_add_par(value = "", style = "Normal") %>%
-    body_add_img(src = map_out_, width = 6, height = 4, style= 'centered') %>%
+    body_add_img(src = map_out_, width = 5.7, height = 4, style= 'centered') %>%
     body_add_par(value = "", style = "Normal") %>%
 
     body_add_break() %>%
@@ -759,16 +975,41 @@ build_ac_doc = function(out_dir,
 
     body_add_break() %>%
 
-    # Figure 3
-    body_add_par(value = descr_fig3, style = "Normal") %>%
-    slip_in_img(src = fig3_f, width = 6.5, height = 7) %>%
-
-    body_add_break() %>%
+    # # Figure 3
+    # body_add_par(value = descr_fig3, style = "Normal") %>%
+    # slip_in_img(src = fig3_f, width = 6.5, height = 7) %>%
+    #
+    # body_add_break() %>%
 
     # Figure 4
     body_add_par(value = descr_fig4, style = "Normal") %>%
-    slip_in_img(src = fig4_f, width = 6.5, height = 5)
+    slip_in_img(src = fig4_f, width = 6.5, height = 5) %>%
+    body_add_break()
 
+
+    # Add species range maps
+  if (range_maps){
+    map_c = 0
+    letters_ = myLetters(length(maps_range_files))
+    for (range_m in maps_range_files){
+      map_c = map_c + 1
+      grts_m = maps_grts_files[map_c]
+      spc_range_name = str_split(str_split(sub('\\.png$', '', range_m), 'range_maps/')[[1]][2], '_range')[[1]][1]
+      spc_grts_name = str_split(str_split(sub('\\.png$', '', grts_m), 'range_maps/')[[1]][2], '_grts')[[1]][1]
+      descr_fig5 = paste0("Figure 5",letters_[map_c],". Species range map for ",spc_range_name)
+      descr_fig6 = paste0("Figure 6",letters_[map_c],". NABat GRTS map with the species range map overlayed(",spc_range_name,").  Green GRTS cells represent the presence of ",spc_range_name," found using only Manual detection.  Blue GRTS cells represent the presence of ",spc_range_name," found using only Automatic detection.  Orange GRTS cells represent the presence of ",spc_range_name," found using both Automatic and Manual detection.  Transparent GRTS cells represent no detections found for ",spc_range_name,".")
+      # Add the maps to the doc
+      doc = doc %>%
+        body_add_fpar(fpar(ftext(paste0('Species:  ',spc_range_name), prop = bold_face_map), fp_p = par_style ), style = 'Normal') %>%
+        body_add_fpar(fpar(ftext(descr_fig5, prop = fig6_font)), style = 'Normal') %>%
+        slip_in_img(src = range_m, width = 5.7, height = 4) %>%
+        body_add_par(value = "", style = "Normal") %>%
+        body_add_fpar(fpar(ftext(descr_fig6, prop = fig6_font)), style = 'Normal') %>%
+        body_add_par(value = "", style = "Normal") %>%
+        slip_in_img(src = grts_m, width = 5.7, height = 4) %>%
+        body_add_break()
+    }
+  }
   return(doc)
 }
 
@@ -813,7 +1054,7 @@ build_col_doc = function(out_dir,
   proj_id = project_id
   project_row_df = subset(project_df, project_df$project_id == proj_id)
   title        = project_row_df$project_name
-  by           = project_row_df$owner_email
+  # by           = project_row_df$owner_email
   organization = project_row_df$organization
   this_project_description = project_row_df$project_description
 
@@ -824,6 +1065,9 @@ build_col_doc = function(out_dir,
   methods = "[EXAMPLE]: Survey sites were chosen based on previous knowledge of winter hibernacula in the region, historical monitoring efforts, and suitability criteria outlined in Loeb et al. (2015). Because detection probability of hibernating bats is highly variable within seasons, surveys were conducted between late January and early March to maximize detection (Loeb et al. 2015). Abundance was estimated using visual counts and accompanying digital photographs. Multiple observers conducted counts in each section of the hibernacula to facilitate the estimation of detection probability and to validate species identifications."
 
   # Results
+
+  # Remove NA values for winter year and species
+  colony_bulk_df = colony_bulk_df %>% tidyr::drop_na(wyear, species)
 
   ## Set variables to be printed in results section
   spp <- unique(colony_bulk_df$species)
@@ -898,7 +1142,7 @@ build_col_doc = function(out_dir,
     body_add_fpar(fpar(ftext(title, prop = bold_face), fp_p = par_style ), style = 'centered') %>%
     # body_add_par(value = title, style = "graphic title") %>%
     body_add_par(value = "", style = "centered") %>%
-    body_add_par(value = paste0('By ', by), style = "centered") %>%
+    # body_add_par(value = paste0('By ', by), style = "centered") %>%
     body_add_par(value = organization, style = "centered") %>%
     body_add_par(value = date, style = "centered") %>%
     body_add_par(value = "", style = "centered") %>%

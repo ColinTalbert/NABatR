@@ -11,15 +11,26 @@ get_colony_bulk_counts(
   branch = "prod",
   url = NULL,
   aws_gql = NULL,
-  aws_alb = NULL
+  aws_alb = NULL,
+  docker = FALSE
 )
 }
 \arguments{
-\item{token}{String token created from get_nabat_gql_token function}
+\item{token}{List token created from get_nabat_gql_token() or get_refresh_token()}
 
-\item{survey_df}{Dataframe a survey dataframe from the output of get_project_surveys}
+\item{survey_df}{Dataframe a survey dataframe from the output of get_acoustic_project_summary()}
 
 \item{project_id}{Numeric or String a project id}
+
+\item{branch}{(optional) String that defaults to 'prod' but can also be 'dev'|'beta'|'local'}
+
+\item{url}{(optional) String url to use for GQL}
+
+\item{aws_gql}{(optional) String url to use in aws}
+
+\item{aws_alb}{(optional) String url to use in aws}
+
+\item{docker}{(optional) Boolean if being run in docker container or not}
 }
 \description{
 Returns all surveys within a single project (project_id)
@@ -27,9 +38,9 @@ Returns all surveys within a single project (project_id)
 \examples{
 
 \dontrun{
-acoustic_bulk_df = get_acoustic_bulk_wavs(token      = 'generated-nabat-gql-token',
-                                        survey_df  = 'dataframe from output of get_project_surveys()',
-                                        project_id = 'number or string of a number')
+acoustic_bulk_df = get_colony_bulk_counts(token,
+                                          get_acoustic_project_summary(),
+                                          project_id)
 }
 
 }
